@@ -56,25 +56,93 @@ main() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for 3D build jobs to complete..."
     sleep 60  # Give jobs time to enter the queue
 
-    #Set a counter for resubmission checks
+    # Set a counter for resubmission checks
     resubmit_counter=0
+    # Track requeued jobs to avoid infinite loops
+    declare -A requeued_jobs
+    max_requeue_attempts=3
+
     # Wait for all batch_3d jobs to complete
     while true; do
-        running_jobs=$(squeue -u $USER -n batch_3d -t RUNNING,PENDING,CONFIGURING -h | wc -l)
+        # Check for jobs in any state (including CG)
+        running_jobs=$(squeue -u $USER -n batch_3d -h | wc -l)
         
-        # Every 60 minutes, check for stuck jobs
-        if [ $((resubmit_counter % 60)) -eq 0 ] && [ $resubmit_counter -gt 0 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking for stuck jobs..."
+        # Specifically check for jobs in CG state
+        completing_jobs=$(squeue -u $USER -n batch_3d -t COMPLETING -h | wc -l)
+        
+        # Count jobs in RUNNING state
+        active_running_jobs=$(squeue -u $USER -n batch_3d -t RUNNING -h | wc -l)
+        
+        # If there are only completing jobs and they've been there for a while, we might need to force cleanup
+        if [ $running_jobs -eq $completing_jobs ] && [ $completing_jobs -gt 0 ]; then
+            # Track how long jobs have been in CG state
+            if [ -z "${cg_wait_start:-}" ]; then
+                cg_wait_start=$(date +%s)
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Detected ${completing_jobs} jobs in COMPLETING state, starting timer"
+            else
+                current_time=$(date +%s)
+                cg_wait_duration=$((current_time - cg_wait_start))
+                
+                # If jobs have been in CG state for more than 10 minutes (600 seconds), try to force cleanup
+                if [ $cg_wait_duration -gt 600 ]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Jobs stuck in COMPLETING state for >10 minutes. Attempting force cleanup..."
+                    
+                    # Get list of jobs in CG state
+                    cg_job_ids=$(squeue -u $USER -n batch_3d -t COMPLETING -h -o "%i")
+                    
+                    for job_id in $cg_job_ids; do
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Attempting to force cleanup of job ${job_id}"
+                        # Try scancel with --signal=KILL for more forceful termination
+                        scancel --signal=KILL $job_id
+                    done
+                    
+                    # Reset timer and wait a bit to see if it worked
+                    unset cg_wait_start
+                    sleep 60
+                    
+                    # Check if jobs are still in CG state
+                    still_completing=$(squeue -u $USER -n batch_3d -t COMPLETING -h | wc -l)
+                    if [ $still_completing -gt 0 ]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: ${still_completing} jobs still stuck in COMPLETING state"
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Will proceed with pipeline anyway, but this may cause issues"
+                        break  # Proceed with pipeline even if jobs are stuck
+                    fi
+                else
+                    # Report how long we've been waiting
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for ${completing_jobs} jobs in COMPLETING state (${cg_wait_duration} seconds so far)"
+                fi
+            fi
+        else
+            # Reset CG wait timer if there are no completing jobs or there are other job states
+            unset cg_wait_start
             
-            # Find jobs running for more than 1 hour
-            stuck_jobs=$(squeue -u $USER -n batch_3d -t RUNNING -h -o "%i" | head -5)
-            
-            if [ -n "$stuck_jobs" ]; then
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Requeuing potentially stuck jobs: $stuck_jobs"
-                for job in $stuck_jobs; do
-                    scontrol requeue $job
-                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Requeued job $job"
-                done
+            # Every 30 minutes, check for stuck jobs that have been running too long
+            if [ $((resubmit_counter % 30)) -eq 0 ] && [ $resubmit_counter -gt 0 ] && [ $active_running_jobs -gt 0 ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking for stuck jobs..."
+                
+                # Find jobs running for more than 1 hour (3600 seconds)
+                # Format: JobID StartTime
+                stuck_jobs=$(squeue -u $USER -n batch_3d -t RUNNING -h -o "%i %S" | 
+                             while read job_id start_time; do
+                                 start_epoch=$(date -d "$start_time" +%s)
+                                 current_epoch=$(date +%s)
+                                 runtime=$((current_epoch - start_epoch))
+                                 
+                                 # If running more than 1 hour and hasn't been requeued too many times
+                                 if [ $runtime -gt 3600 ] && [ "${requeued_jobs[$job_id]:-0}" -lt $max_requeue_attempts ]; then
+                                     echo "$job_id"
+                                 fi
+                             done)
+                
+                if [ -n "$stuck_jobs" ]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Requeuing stuck jobs running for >1 hour: $stuck_jobs"
+                    for job in $stuck_jobs; do
+                        # Increment requeue counter for this job
+                        requeued_jobs[$job]=$((${requeued_jobs[$job]:-0} + 1))
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Requeuing job $job (attempt ${requeued_jobs[$job]}/$max_requeue_attempts)"
+                        scontrol requeue $job
+                    done
+                fi
             fi
         fi
         
@@ -184,21 +252,6 @@ main() {
             
             if [ -f "${OUTDOCK_FILE}" ]; then
                 log "Processing ${OUTDOCK_FILE}"
-                # awk '
-                #     /^[[:space:]]*[0-9]+ NCh/ {
-                #         id = substr($2, 3, length($2)-4);
-                #         id = "ZINC" id;
-                #         score = $NF;
-                #         if (!(id in scores) || score < scores[id]) {
-                #             scores[id] = score;
-                #         }
-                #     }
-                #     END {
-                #         for (id in scores) {
-                #             print id "," scores[id];
-                #         }
-                #     }
-                # ' "${OUTDOCK_FILE}" >> "${RESULTS_FILE}"
                 python3 parse_outdock.py "${OUTDOCK_FILE}" >> "${RESULTS_FILE}"
             else
                 log "Warning: OUTDOCK file not found at ${OUTDOCK_FILE}"
@@ -215,12 +268,12 @@ main() {
 
     #Cleaning up the uncessesary files
     log "Cleaning up..."
-    #rm -rf "${WORK_DIR}/output_3d"
-    #rm -rf "${WORK_DIR}/output_3d_mols_inputs"
-    #rm -rf "${WORK_DIR}/tarballs_repacked"
+    rm -rf "${WORK_DIR}/output_3d"
+    rm -rf "${WORK_DIR}/output_3d_mols_inputs"
+    rm -rf "${WORK_DIR}/tarballs_repacked"
     #cleaning up the scratch directory
-    #cleanup_scratch
-    #rm -rf "${WORK_DIR}/3d_mols_inputs.sdi"
+    cleanup_scratch
+    rm -rf "${WORK_DIR}/3d_mols_inputs.sdi"
     log "Pipeline completed successfully"
 }
 

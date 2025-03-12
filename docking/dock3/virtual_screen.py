@@ -71,6 +71,19 @@ class DOCK3VirtualScreen:
         """Match original VirtualScreen interface"""
         try:
             print("Starting __call__")
+            
+            # Ensure temp directory exists
+            self.temp_dir = Path(__file__).parent / "temp"
+            if not self.temp_dir.exists():
+                print(f"Recreating temp directory: {self.temp_dir}")
+                self.temp_dir.mkdir(exist_ok=True)
+                
+                # Copy scripts to temp directory
+                for ext in ["*.sh", "*.bash", "*.py"]:
+                    for script in self.scripts_dir.glob(ext):
+                        shutil.copy2(script, self.temp_dir)
+                        os.chmod(self.temp_dir / script.name, 0o755)
+            
             # Create DataFrame from selected SMILES
             df_selected = pd.DataFrame({'smiles': smis})
             
