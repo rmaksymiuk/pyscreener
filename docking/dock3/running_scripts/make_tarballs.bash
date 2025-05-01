@@ -20,7 +20,7 @@ ls -la "${TARBALL_SOURCE}"
 
 # optional parameters
 WORKING_DIRECTORY=${WORKING_DIRECTORY-/tmp/$(whoami)}
-PACKAGES_PER_PACKAGE=${PACKAGES_PER_PACKAGE-100}
+PACKAGES_PER_PACKAGE=${PACKAGES_PER_PACKAGE-50} #how many each package will have, 80 jobs -> 2 packages, 50 jobs -> 1 package, 150 jobs -> 3 packages
 PACKAGE_TYPE=${PACKAGE_TYPE-db2.gz}
 PACKAGE_TYPE_SHORT=$(echo $PACKAGE_TYPE | cut -d'.' -f1)
 

@@ -51,5 +51,10 @@ ls -l "${INPUT_SOURCE}"
 echo "File contents:"
 cat "${INPUT_SOURCE}"
 
+#Configuring the subdock for parallel execution
+export USE_SLURM=true
+
+
+
 # Run the subdock script
 sh /nfs/soft/dock/versions/dock38/DOCK/ucsfdock/docking/submit/slurm/subdock.bash

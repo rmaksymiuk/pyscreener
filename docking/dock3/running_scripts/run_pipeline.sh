@@ -8,7 +8,7 @@ log() {
 }
 
 cleanup_scratch() {
-    local scratch_path="${WORK_DIR}/scratch_3d"
+    local scratch_path="/scratch/$(whoami)" #"${WORK_DIR}/scratch_3d"
     
     if [[ -d "$scratch_path" ]]; then
         log "Removing scratch directory: $scratch_path"
@@ -48,6 +48,8 @@ mkdir -p "${WORK_DIR}/tarballs_repacked"
 main() {
     log "Starting pipeline with input file: ${INPUT_FILE}"
     
+    log "Cleaning up scratch before starting pipeline"
+    cleanup_scratch
     # Step 1: Run 3D build - this submits SLURM jobs
     log "Running 3D build step"
     ./run_3d_build.sh "${INPUT_BASENAME}"
@@ -267,13 +269,13 @@ main() {
     fi
 
     #Cleaning up the uncessesary files
-    log "Cleaning up..."
-    rm -rf "${WORK_DIR}/output_3d"
-    rm -rf "${WORK_DIR}/output_3d_mols_inputs"
-    rm -rf "${WORK_DIR}/tarballs_repacked"
+    #log "Cleaning up..."
+    #rm -rf "${WORK_DIR}/output_3d"
+    #rm -rf "${WORK_DIR}/output_3d_mols_inputs"
+    #rm -rf "${WORK_DIR}/tarballs_repacked"
     #cleaning up the scratch directory
-    cleanup_scratch
-    rm -rf "${WORK_DIR}/3d_mols_inputs.sdi"
+    #cleanup_scratch
+    #rm -rf "${WORK_DIR}/3d_mols_inputs.sdi"
     log "Pipeline completed successfully"
 }
 

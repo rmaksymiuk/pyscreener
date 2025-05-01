@@ -26,7 +26,10 @@ class DOCK3VirtualScreen:
                  pipeline_scripts=None,
                  ncpu=1,
                  library_file=None,
-                 output_dir: Optional[Union[str, Path]] = None):
+                 output_dir: Optional[Union[str, Path]] = None,
+                 backup_dir: Optional[Union[str, Path]] = None,
+                 sep = None,
+                 db_file = None):
         #These 5 are the most important parameters in objective file
         self.dockfiles = Path(dockfiles)
         self.library_file = Path(library_file)
@@ -34,9 +37,18 @@ class DOCK3VirtualScreen:
         self.screen_type = screen_type
         #not sure if needed
         self.ncpu = ncpu
+        self.backup_dir = Path(backup_dir)
+        self.sep = sep
+        if db_file is not None:
+            self.db_file = Path(db_file)
+        else:
+            self.db_file = None
         
         # Create temp directory inside dock3 folder
-        self.temp_dir = Path(__file__).parent / "temp"
+        #self.temp_dir = Path(__file__).parent / "temp"
+        #FIXED_BUG
+        username = os.environ.get("USER", os.environ.get("USERNAME", "default_user"))
+        self.temp_dir = Path(f"/nfs/exh/work/{username}/temp")
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)  # Clean up any existing temp directory
         self.temp_dir.mkdir(exist_ok=True)
@@ -73,7 +85,10 @@ class DOCK3VirtualScreen:
             print("Starting __call__")
             
             # Ensure temp directory exists
-            self.temp_dir = Path(__file__).parent / "temp"
+            #self.temp_dir = Path(__file__).parent / "temp"
+            #FIXED_BUG
+            username = os.environ.get("USER", os.environ.get("USERNAME", "default_user"))
+            self.temp_dir = Path(f"/nfs/exh/work/{username}/temp")
             if not self.temp_dir.exists():
                 print(f"Recreating temp directory: {self.temp_dir}")
                 self.temp_dir.mkdir(exist_ok=True)
@@ -86,7 +101,6 @@ class DOCK3VirtualScreen:
             
             # Create DataFrame from selected SMILES
             df_selected = pd.DataFrame({'smiles': smis})
-            
             # Read library in chunks to save memory
             chunk_size = 1_000_000  # Adjust based on available RAM
             matched_pairs = []
@@ -98,13 +112,13 @@ class DOCK3VirtualScreen:
             
             for chunk in pd.read_csv(self.library_file,
                                 usecols=['smiles', 'zincid'],
-                                chunksize=chunk_size):
+                                chunksize=chunk_size,
+                                sep=self.sep):
                 
                 # Merge current chunk with selected SMILES
                 matches = pd.merge(df_selected, chunk, 
                                 on='smiles', 
                                 how='inner')
-                
                 if not matches.empty:
                     # Process each pair to ensure uniqueness
                     for pair in matches[['smiles', 'zincid']].values:
@@ -241,9 +255,7 @@ class DOCK3VirtualScreen:
             if tracked_but_not_processed:
                 print(f"Warning: {len(tracked_but_not_processed)} zinc IDs were tracked but not found in results")
             
-            # Copy results to permanent storage
-            self.collect_files()
-            
+
             # Write full results to the output directory
             full_results_path = self.path / "full_results.txt"
             with open(full_results_path, "w") as f:
@@ -252,12 +264,13 @@ class DOCK3VirtualScreen:
                     f.write(f"SMILES: {result.smiles} ZINC ID: {result.zinc_id} Score: {score_str}\n")
             
             print(f"Wrote {len(self._results)} results to {full_results_path}")
-            
+            print(f"Saving file to backup directory: {self.backup_dir}")
+            self.collect_files()
             # Clean up temp directory
             if self.temp_dir.exists():
                 print(f"Cleaning up temp directory: {self.temp_dir}")
                 shutil.rmtree(self.temp_dir)
-            
+                pass
             # Populate scores array for return
             for result in self._results:
                 if result.score is not None and result.smiles in smi_to_idx:
@@ -266,6 +279,8 @@ class DOCK3VirtualScreen:
             return scores
                 
         except Exception as e:
+            print(f"Saving to the backup directory: {self.backup_dir}")
+            self.collect_files()
             # Clean up temp directory even if there's an error
             if hasattr(self, 'temp_dir') and self.temp_dir.exists():
                 shutil.rmtree(self.temp_dir)
@@ -280,12 +295,40 @@ class DOCK3VirtualScreen:
 
     
     def collect_files(self):
-            """Copy important files from temp directory to permanent storage"""
-            if self.temp_dir and self.temp_dir.exists():
+            """Copy important files and folders from temp directory to permanent storage"""
+            if self.temp_dir and self.temp_dir.exists() and self.backup_dir and self.backup_dir.exists():
                 # Generate timestamp for unique filenames
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 
-                # Copy results file with timestamp
+                # Create a timestamped directory in the backup location
+                backup_subdir = self.backup_dir / f"dock3_backup_{timestamp}"
+                backup_subdir.mkdir(exist_ok=True, parents=True)
+                
+                # Copy specific folders
+                folders_to_copy = ["output_3d", "output_3d_mols_inputs"]
+                for folder_name in folders_to_copy:
+                    src_folder = self.temp_dir / folder_name
+                    if src_folder.exists():
+                        dst_folder = backup_subdir / folder_name
+                        print(f"Copying folder {src_folder} to {dst_folder}")
+                        shutil.copytree(src_folder, dst_folder, dirs_exist_ok=True)
+                
+                # Copy specific files
+                files_to_copy = ["input.smi", "3d_mols_inputs.sdi", "results.smi"]
+                for file_name in files_to_copy:
+                    src_file = self.temp_dir / file_name
+                    if src_file.exists():
+                        dst_file = backup_subdir / file_name
+                        print(f"Copying file {src_file} to {dst_file}")
+                        shutil.copy2(src_file, dst_file)
+                
+                # Also copy log files with timestamp
+                for log_file in self.temp_dir.glob("*.log"):
+                    dst_file = backup_subdir / log_file.name
+                    print(f"Copying log file {log_file} to {dst_file}")
+                    shutil.copy2(log_file, dst_file)
+                
+                # Copy results file to original output directory as well (for backward compatibility)
                 if (self.temp_dir / "results.smi").exists():
                     results_file = self.path / f"results_{timestamp}.smi"
                     shutil.copy2(
@@ -293,8 +336,4 @@ class DOCK3VirtualScreen:
                         results_file
                     )
                 
-                # Copy log files with timestamp
-                for log_file in self.temp_dir.glob("*.log"):
-                    new_name = f"{log_file.stem}_{timestamp}{log_file.suffix}"
-                    shutil.copy2(log_file, self.path / new_name)
-    
+                print(f"Backup completed to {backup_subdir}")

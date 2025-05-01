@@ -132,10 +132,13 @@ def add_screen_args(parser: ArgumentParser):
         help="the type of docking screen to perform",
     )
     parser.add_argument("--receptors", nargs="+", help="the filenames of the receptors")
+    parser.add_argument("--backup_dir", type=str, required=False, help="path/to/backup/directory")
     parser.add_argument("--dockfiles", type=str, required=False, help="path/to/dockfiles")
+    parser.add_argument("--sep", type=str, required=False, help="separator for the columns in the library file, , or tab")
     parser.add_argument("--pipeline_scripts", type=str, required=False, help="path/to/pipeline_scripts")
     parser.add_argument("--library", type=str, required = False, help="path/to/full_library")
     parser.add_argument("--docking-output-dir", type=str, required=False, help="path/to/docking_output_dir")
+    parser.add_argument("--db_file", type=str, required=False, help="Path to Database(SQLite, PostgreSQL, etc.)")
     parser.add_argument(
         "--center",
         type=float,

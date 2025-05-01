@@ -14,7 +14,7 @@ log "Using absolute input file path: ${INPUT_FILE}"
 log "Working directory: ${WORK_DIR}"
 
 # Create scratch directory
-export SCRATCH_DIR="${WORK_DIR}/scratch_3d"
+export SCRATCH_DIR="/scratch/$(whoami)" #"${WORK_DIR}/scratch_3d"  "/scratch/$(whoami)" 
 mkdir -p "${SCRATCH_DIR}"
 
 # Source the environment
